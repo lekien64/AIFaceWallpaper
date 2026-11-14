@@ -1,191 +1,374 @@
 
 package com.lekien64.aifacewallpaper
 
+import android.Manifest
+import android.content.pm.PackageManager
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.camera.core.CameraSelector
+import androidx.camera.core.Preview
+import androidx.camera.lifecycle.ProcessCameraProvider
+import androidx.camera.view.PreviewView
 import androidx.compose.foundation.background
-import androidx.compose.foundation.isSystemInDarkTheme
+import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
-import androidx.compose.runtime.Composable
+import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.viewinterop.AndroidView
+import androidx.core.content.ContextCompat
+import androidx.lifecycle.compose.LocalLifecycleOwner
+import kotlinx.coroutines.launch
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        setContent {
-            AppScreen()
+        setContent { AppScreen() }
+    }
+}
+
+private val Accent = Color(0xFF91AAFF)
+
+@Composable
+private fun AppScreen() {
+    var scannerOpen by remember { mutableStateOf(false) }
+
+    MaterialTheme(
+        colorScheme = darkColorScheme(
+            primary = Accent,
+            background = Color(0xFF10141F),
+            surface = Color(0xFF283448)
+        )
+    ) {
+        if (scannerOpen) {
+            ScannerScreen(onBack = { scannerOpen = false })
+        } else {
+            HomeScreen(onOpenScanner = { scannerOpen = true })
         }
     }
 }
 
 @Composable
-private fun AppScreen() {
-    val dark = isSystemInDarkTheme()
-
-    val backgroundTop = if (dark) Color(0xFF10141F)
-        else Color(0xFFE8EEFA)
-
-    val backgroundBottom = if (dark) Color(0xFF202C42)
-        else Color(0xFFD8E4F7)
-
-    val mainText = if (dark) Color(0xFFF4F6FF)
-        else Color(0xFF18243A)
-
-    val secondaryText = if (dark) Color(0xFFB9C3D8)
-        else Color(0xFF596780)
-
-    val accent = if (dark) Color(0xFF91AAFF)
-        else Color(0xFF426CE0)
-
-    val cardColor = if (dark) Color(0xFF30394B).copy(alpha = 0.76f)
-        else Color(0xFFFFFFFF).copy(alpha = 0.78f)
-
-    MaterialTheme(
-        colorScheme = if (dark) darkColorScheme() else lightColorScheme()
+private fun HomeScreen(onOpenScanner: () -> Unit) {
+    Column(
+        Modifier
+            .fillMaxSize()
+            .background(
+                Brush.verticalGradient(
+                    listOf(Color(0xFF10141F), Color(0xFF202C42))
+                )
+            )
+            .padding(22.dp),
+        verticalArrangement = Arrangement.spacedBy(20.dp)
     ) {
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .background(
-                    Brush.verticalGradient(
-                        listOf(backgroundTop, backgroundBottom)
-                    )
-                )
-                .padding(horizontal = 22.dp),
-            verticalArrangement = Arrangement.spacedBy(20.dp)
-        ) {
-            Spacer(Modifier.height(22.dp))
+        Spacer(Modifier.height(20.dp))
+
+        Text("AI FACE", color = Accent, fontSize = 15.sp,
+            fontWeight = FontWeight.Bold, letterSpacing = 5.sp)
+
+        Text("WALLPAPER", color = Color.White,
+            fontSize = 32.sp, fontWeight = FontWeight.ExtraBold)
+
+        Text(
+            "Tạo hồ sơ khuôn mặt và biến video thành hình nền động.",
+            color = Color(0xFFB9C3D8), fontSize = 16.sp
+        )
+
+        GlassCard {
+            Text("HỒ SƠ KHUÔN MẶT", color = Accent,
+                fontWeight = FontWeight.Bold)
+
+            Spacer(Modifier.height(12.dp))
+
+            Text("Chưa có hồ sơ", color = Color.White,
+                fontSize = 23.sp, fontWeight = FontWeight.Bold)
+
+            Spacer(Modifier.height(8.dp))
 
             Text(
-                text = "AI FACE",
-                color = accent,
-                fontSize = 15.sp,
-                fontWeight = FontWeight.Bold,
-                letterSpacing = 5.sp
+                "Quét 7 góc khuôn mặt để tạo hồ sơ AI cá nhân.",
+                color = Color(0xFFB9C3D8)
             )
 
-            Text(
-                text = "WALLPAPER",
-                color = mainText,
-                fontSize = 32.sp,
-                fontWeight = FontWeight.ExtraBold,
-                letterSpacing = 1.sp
-            )
+            Spacer(Modifier.height(18.dp))
 
-            Text(
-                text = "Tạo hồ sơ khuôn mặt và biến video thành hình nền động.",
-                color = secondaryText,
-                fontSize = 17.sp,
-                lineHeight = 26.sp
-            )
-
-            GlassCard(cardColor) {
-                Text(
-                    text = "HỒ SƠ KHUÔN MẶT",
-                    color = accent,
-                    fontSize = 14.sp,
-                    fontWeight = FontWeight.Bold,
-                    letterSpacing = 1.sp
-                )
-
-                Spacer(Modifier.height(15.dp))
-
-                Text(
-                    text = "Chưa có hồ sơ",
-                    color = mainText,
-                    fontSize = 24.sp,
-                    fontWeight = FontWeight.Bold
-                )
-
-                Spacer(Modifier.height(9.dp))
-
-                Text(
-                    text = "Bộ quét 7 góc sẽ hướng dẫn chụp và kiểm tra chất lượng ảnh khuôn mặt.",
-                    color = secondaryText,
-                    fontSize = 16.sp,
-                    lineHeight = 25.sp
-                )
-
-                Spacer(Modifier.height(18.dp))
-
-                Button(
-                    onClick = {},
-                    enabled = false,
-                    shape = RoundedCornerShape(50.dp),
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Text(
-                        "AI Face Scanner · Sắp ra mắt",
-                        fontSize = 15.sp
-                    )
-                }
+            Button(
+                onClick = onOpenScanner,
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(50.dp)
+            ) {
+                Text("MỞ AI FACE SCANNER")
             }
+        }
 
-            GlassCard(cardColor) {
-                Text(
-                    text = "CHẾ ĐỘ TẠO VIDEO",
-                    color = accent,
-                    fontSize = 14.sp,
-                    fontWeight = FontWeight.Bold,
-                    letterSpacing = 1.sp
-                )
+        GlassCard {
+            Text("CHẾ ĐỘ TẠO VIDEO", color = Accent,
+                fontWeight = FontWeight.Bold)
 
-                Spacer(Modifier.height(14.dp))
+            Spacer(Modifier.height(12.dp))
 
-                Text(
-                    text = "Review Before Create",
-                    color = mainText,
-                    fontSize = 21.sp,
-                    fontWeight = FontWeight.Bold
-                )
+            Text("Review Before Create", color = Color.White,
+                fontSize = 21.sp, fontWeight = FontWeight.Bold)
 
-                Spacer(Modifier.height(9.dp))
+            Spacer(Modifier.height(8.dp))
 
-                Text(
-                    text = "Bạn sẽ xem lại hồ sơ và mẫu video trước khi bắt đầu xử lý. Tự động tạo chỉ hoạt động khi được bật rõ ràng.",
-                    color = secondaryText,
-                    fontSize = 16.sp,
-                    lineHeight = 25.sp
-                )
+            Text(
+                "Xem lại hồ sơ và mẫu video trước khi xử lý.",
+                color = Color(0xFFB9C3D8)
+            )
+        }
+
+        Spacer(Modifier.weight(1f))
+
+        Text(
+            "Xử lý ngoại tuyến · Dữ liệu lưu trên thiết bị",
+            color = Color(0xFFB9C3D8), fontSize = 12.sp
+        )
+    }
+}
+
+@Composable
+private fun ScannerScreen(onBack: () -> Unit) {
+    val context = LocalContext.current
+    var hasPermission by remember {
+        mutableStateOf(
+            ContextCompat.checkSelfPermission(
+                context, Manifest.permission.CAMERA
+            ) == PackageManager.PERMISSION_GRANTED
+        )
+    }
+
+    val permissionLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        hasPermission = granted
+    }
+
+    var currentAngle by remember { mutableIntStateOf(0) }
+    var useFrontCamera by remember { mutableStateOf(true) }
+
+    val angles = listOf(
+        "Chính diện",
+        "Trái 30°",
+        "Phải 30°",
+        "Trái 60°",
+        "Phải 60°",
+        "Hơi ngẩng lên",
+        "Hơi cúi xuống"
+    )
+
+    LaunchedEffect(Unit) {
+        if (!hasPermission) {
+            permissionLauncher.launch(Manifest.permission.CAMERA)
+        }
+    }
+
+    Column(
+        Modifier
+            .fillMaxSize()
+            .background(Color(0xFF10141F))
+            .padding(16.dp)
+    ) {
+        Row(
+            Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            TextButton(onClick = onBack) {
+                Text("‹ Quay lại", color = Color.White)
             }
 
             Spacer(Modifier.weight(1f))
 
             Text(
-                text = "Xử lý ngoại tuyến · Dữ liệu lưu trên thiết bị",
-                color = secondaryText,
-                fontSize = 12.sp,
-                modifier = Modifier.padding(bottom = 16.dp)
+                "AI FACE SCANNER",
+                color = Accent,
+                fontWeight = FontWeight.Bold,
+                letterSpacing = 1.sp
             )
         }
+
+        Spacer(Modifier.height(12.dp))
+
+        Box(
+            Modifier
+                .weight(1f)
+                .fillMaxWidth()
+                .background(
+                    Color(0xFF202B3D),
+                    RoundedCornerShape(28.dp)
+                ),
+            contentAlignment = Alignment.Center
+        ) {
+            if (hasPermission) {
+                CameraPreview(useFrontCamera)
+            } else {
+                Text(
+                    "Cần cấp quyền camera để bắt đầu quét.",
+                    color = Color.White
+                )
+            }
+
+            Box(
+                Modifier
+                    .size(230.dp, 300.dp)
+                    .border(
+                        2.dp,
+                        Accent.copy(alpha = 0.9f),
+                        RoundedCornerShape(48.dp)
+                    )
+            )
+
+            Column(
+                Modifier
+                    .align(Alignment.BottomCenter)
+                    .padding(18.dp),
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                Text(
+                    "Đưa khuôn mặt vào khung",
+                    color = Color.White,
+                    fontWeight = FontWeight.Bold
+                )
+                Text(
+                    "Giữ điện thoại ngang tầm mắt",
+                    color = Color.White.copy(alpha = 0.8f),
+                    fontSize = 12.sp
+                )
+            }
+        }
+
+        Spacer(Modifier.height(14.dp))
+
+        GlassCard {
+            Text("GÓC ĐANG QUÉT", color = Accent,
+                fontWeight = FontWeight.Bold, fontSize = 12.sp)
+
+            Spacer(Modifier.height(8.dp))
+
+            Text(
+                angles[currentAngle],
+                color = Color.White,
+                fontSize = 23.sp,
+                fontWeight = FontWeight.Bold
+            )
+
+            Spacer(Modifier.height(10.dp))
+
+            LinearProgressIndicator(
+                progress = { (currentAngle + 1) / 7f },
+                modifier = Modifier.fillMaxWidth(),
+                color = Accent,
+                trackColor = Color.White.copy(alpha = 0.15f)
+            )
+
+            Spacer(Modifier.height(8.dp))
+
+            Text(
+                "Góc ${currentAngle + 1}/7 · Tiến độ hướng dẫn",
+                color = Color(0xFFB9C3D8),
+                fontSize = 12.sp
+            )
+        }
+
+        Spacer(Modifier.height(12.dp))
+
+        Row(
+            Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            OutlinedButton(
+                onClick = {
+                    useFrontCamera = !useFrontCamera
+                },
+                modifier = Modifier.weight(1f)
+            ) {
+                Text("Đổi camera")
+            }
+
+            Button(
+                onClick = {
+                    currentAngle = (currentAngle + 1) % angles.size
+                },
+                modifier = Modifier.weight(1f),
+                enabled = hasPermission
+            ) {
+                Text("Góc tiếp theo")
+            }
+        }
+
+        Spacer(Modifier.height(8.dp))
     }
 }
 
 @Composable
-private fun GlassCard(
-    color: Color,
-    content: @Composable ColumnScope.() -> Unit
-) {
+private fun CameraPreview(useFrontCamera: Boolean) {
+    val context = LocalContext.current
+    val lifecycleOwner = LocalLifecycleOwner.current
+
+    AndroidView(
+        modifier = Modifier.fillMaxSize(),
+        factory = { ctx ->
+            PreviewView(ctx).apply {
+                scaleType = PreviewView.ScaleType.FILL_CENTER
+            }
+        },
+        update = { previewView ->
+            val providerFuture = ProcessCameraProvider.getInstance(context)
+
+            providerFuture.addListener({
+                val provider = providerFuture.get()
+
+                val preview = Preview.Builder()
+                    .build()
+                    .also {
+                        it.surfaceProvider = previewView.surfaceProvider
+                    }
+
+                val selector = if (useFrontCamera) {
+                    CameraSelector.DEFAULT_FRONT_CAMERA
+                } else {
+                    CameraSelector.DEFAULT_BACK_CAMERA
+                }
+
+                try {
+                    provider.unbindAll()
+                    provider.bindToLifecycle(
+                        lifecycleOwner,
+                        selector,
+                        preview
+                    )
+                } catch (_: Exception) {
+                    // Camera unavailable or selector unsupported.
+                }
+            }, ContextCompat.getMainExecutor(context))
+        }
+    )
+}
+
+@Composable
+private fun GlassCard(content: @Composable ColumnScope.() -> Unit) {
     Card(
         modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(30.dp),
+        shape = RoundedCornerShape(28.dp),
         colors = CardDefaults.cardColors(
-            containerColor = color
+            containerColor = Color(0xFF303B50).copy(alpha = 0.78f)
         ),
-        elevation = CardDefaults.cardElevation(
-            defaultElevation = 3.dp
-        )
+        elevation = CardDefaults.cardElevation(3.dp)
     ) {
         Column(
-            modifier = Modifier.padding(22.dp),
+            Modifier.padding(20.dp),
             content = content
         )
     }
