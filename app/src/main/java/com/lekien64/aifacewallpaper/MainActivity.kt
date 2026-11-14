@@ -39,6 +39,10 @@ import com.google.mediapipe.tasks.vision.facelandmarker.FaceLandmarker
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.util.concurrent.Executors
+import kotlin.math.atan
+import kotlin.math.max
+import kotlin.math.min
+import kotlin.math.roundToInt
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -48,6 +52,67 @@ class MainActivity : ComponentActivity() {
 }
 
 private val Accent = Color(0xFF91AAFF)
+
+private data class HeadPose(
+    val detected: Boolean = false,
+    val yaw: Float = 0f,
+    val pitch: Float = 0f,
+    val landmarks: Int = 0
+)
+
+private fun estimateHeadPose(
+    landmarks: List<com.google.mediapipe.tasks.components.containers.NormalizedLandmark>,
+    frontCamera: Boolean
+): HeadPose? {
+    if (landmarks.size < 264) return null
+
+    val nose = landmarks[1]
+    val leftEye = landmarks[33]
+    val rightEye = landmarks[263]
+    val mouthLeft = landmarks[61]
+    val mouthRight = landmarks[291]
+
+    val eyeCenterX = (leftEye.x() + rightEye.x()) / 2f
+    val eyeCenterY = (leftEye.y() + rightEye.y()) / 2f
+    val eyeWidth = kotlin.math.abs(leftEye.x() - rightEye.x())
+
+    if (eyeWidth < 0.001f) return null
+
+    val noseOffset = (nose.x() - eyeCenterX) / eyeWidth
+
+    var yaw = Math.toDegrees(
+        atan((noseOffset * 2.0f).toDouble())
+    ).toFloat()
+
+    if (frontCamera) yaw = -yaw
+
+    val mouthCenterY = (mouthLeft.y() + mouthRight.y()) / 2f
+    val eyeToMouth = mouthCenterY - eyeCenterY
+
+    if (eyeToMouth <= 0.001f) return null
+
+    val nosePosition = (nose.y() - eyeCenterY) / eyeToMouth
+
+    val pitch = ((nosePosition - 0.52f) * 120f)
+        .coerceIn(-45f, 45f)
+
+    return HeadPose(
+        detected = true,
+        yaw = yaw.coerceIn(-60f, 60f),
+        pitch = pitch,
+        landmarks = landmarks.size
+    )
+}
+
+private fun directionText(yaw: Float, pitch: Float): String {
+    return when {
+        yaw < -12f -> "Đang quay trái"
+        yaw > 12f -> "Đang quay phải"
+        pitch < -10f -> "Đang ngẩng lên"
+        pitch > 10f -> "Đang cúi xuống"
+        else -> "Gần chính diện"
+    }
+}
 
 @Composable
 private fun AppScreen() {
@@ -105,20 +170,13 @@ private fun HomeScreen(onOpenScanner: () -> Unit) {
         )
 
         GlassCard {
-            Text(
-                "HỒ SƠ KHUÔN MẶT",
-                color = Accent,
-                fontWeight = FontWeight.Bold
-            )
+            Text("HỒ SƠ KHUÔN MẶT", color = Accent,
+                fontWeight = FontWeight.Bold)
 
             Spacer(Modifier.height(12.dp))
 
-            Text(
-                "Chưa có hồ sơ",
-                color = Color.White,
-                fontSize = 23.sp,
-                fontWeight = FontWeight.Bold
-            )
+            Text("Chưa có hồ sơ", color = Color.White,
+                fontSize = 23.sp, fontWeight = FontWeight.Bold)
 
             Spacer(Modifier.height(8.dp))
 
@@ -139,20 +197,13 @@ private fun HomeScreen(onOpenScanner: () -> Unit) {
         }
 
         GlassCard {
-            Text(
-                "CHẾ ĐỘ TẠO VIDEO",
-                color = Accent,
-                fontWeight = FontWeight.Bold
-            )
+            Text("CHẾ ĐỘ TẠO VIDEO", color = Accent,
+                fontWeight = FontWeight.Bold)
 
             Spacer(Modifier.height(12.dp))
 
-            Text(
-                "Review Before Create",
-                color = Color.White,
-                fontSize = 21.sp,
-                fontWeight = FontWeight.Bold
-            )
+            Text("Review Before Create", color = Color.White,
+                fontSize = 21.sp, fontWeight = FontWeight.Bold)
 
             Spacer(Modifier.height(8.dp))
 
@@ -193,8 +244,8 @@ private fun ScannerScreen(onBack: () -> Unit) {
 
     var currentAngle by remember { mutableIntStateOf(0) }
     var useFrontCamera by remember { mutableStateOf(true) }
+    var pose by remember { mutableStateOf(HeadPose()) }
     var faceStatus by remember { mutableStateOf("Đang chờ camera") }
-    var landmarkCount by remember { mutableIntStateOf(0) }
 
     val angles = listOf(
         "Chính diện",
@@ -251,10 +302,10 @@ private fun ScannerScreen(onBack: () -> Unit) {
             if (hasPermission) {
                 CameraPreview(
                     useFrontCamera = useFrontCamera,
-                    onFaceResult = { count ->
-                        landmarkCount = count
-                        faceStatus = if (count > 0) {
-                            "Đã nhận diện khuôn mặt"
+                    onPoseResult = { newPose ->
+                        pose = newPose
+                        faceStatus = if (newPose.detected) {
+                            directionText(newPose.yaw, newPose.pitch)
                         } else {
                             "Chưa phát hiện khuôn mặt"
                         }
@@ -303,7 +354,7 @@ private fun ScannerScreen(onBack: () -> Unit) {
 
         GlassCard {
             Text(
-                "TRẠNG THÁI NHẬN DIỆN",
+                "AI PHÂN TÍCH TƯ THẾ ĐẦU",
                 color = Accent,
                 fontWeight = FontWeight.Bold,
                 fontSize = 12.sp
@@ -314,27 +365,41 @@ private fun ScannerScreen(onBack: () -> Unit) {
             Text(
                 faceStatus,
                 color = Color.White,
-                fontSize = 18.sp,
+                fontSize = 20.sp,
                 fontWeight = FontWeight.Bold
             )
 
-            if (landmarkCount > 0) {
-                Spacer(Modifier.height(4.dp))
-                Text(
-                    "$landmarkCount điểm mốc khuôn mặt",
-                    color = Color(0xFFB9C3D8),
-                    fontSize = 12.sp
-                )
+            Spacer(Modifier.height(8.dp))
+
+            Row(
+                Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                PoseValue("YAW", pose.yaw)
+                PoseValue("PITCH", pose.pitch)
+                Column {
+                    Text("LANDMARKS", color = Accent, fontSize = 11.sp)
+                    Text(
+                        "${pose.landmarks}",
+                        color = Color.White,
+                        fontSize = 18.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
             }
+
+            Spacer(Modifier.height(8.dp))
+
+            Text(
+                "Số đo ước lượng, chưa hiệu chuẩn",
+                color = Color(0xFFB9C3D8),
+                fontSize = 11.sp
+            )
 
             Spacer(Modifier.height(14.dp))
 
-            Text(
-                "GÓC ĐANG QUÉT",
-                color = Accent,
-                fontWeight = FontWeight.Bold,
-                fontSize = 12.sp
-            )
+            Text("GÓC ĐANG QUÉT", color = Accent,
+                fontWeight = FontWeight.Bold, fontSize = 12.sp)
 
             Spacer(Modifier.height(8.dp))
 
@@ -372,6 +437,7 @@ private fun ScannerScreen(onBack: () -> Unit) {
             OutlinedButton(
                 onClick = {
                     useFrontCamera = !useFrontCamera
+                    pose = HeadPose()
                 },
                 modifier = Modifier.weight(1f)
             ) {
@@ -394,9 +460,22 @@ private fun ScannerScreen(onBack: () -> Unit) {
 }
 
 @Composable
+private fun PoseValue(label: String, value: Float) {
+    Column {
+        Text(label, color = Accent, fontSize = 11.sp)
+        Text(
+            "${value.roundToInt()}°",
+            color = Color.White,
+            fontSize = 18.sp,
+            fontWeight = FontWeight.Bold
+        )
+    }
+}
+
+@Composable
 private fun CameraPreview(
     useFrontCamera: Boolean,
-    onFaceResult: (Int) -> Unit,
+    onPoseResult: (HeadPose) -> Unit,
     onError: (String) -> Unit
 ) {
     val context = LocalContext.current
@@ -414,6 +493,10 @@ private fun CameraPreview(
         var faceLandmarker: FaceLandmarker? = null
         var cameraProvider: ProcessCameraProvider? = null
 
+        var smoothYaw = 0f
+        var smoothPitch = 0f
+        var hasPreviousPose = false
+
         try {
             val options = FaceLandmarker.FaceLandmarkerOptions.builder()
                 .setBaseOptions(
@@ -427,8 +510,34 @@ private fun CameraPreview(
                 .setMinFacePresenceConfidence(0.5f)
                 .setMinTrackingConfidence(0.5f)
                 .setResultListener { result, _ ->
-                    val count = result.faceLandmarks().firstOrNull()?.size ?: 0
-                    onFaceResult(count)
+                    val face = result.faceLandmarks().firstOrNull()
+
+                    if (face == null) {
+                        hasPreviousPose = false
+                        onPoseResult(HeadPose())
+                    } else {
+                        val measured = estimateHeadPose(face, useFrontCamera)
+
+                        if (measured != null) {
+                            if (!hasPreviousPose) {
+                                smoothYaw = measured.yaw
+                                smoothPitch = measured.pitch
+                                hasPreviousPose = true
+                            } else {
+                                smoothYaw = smoothYaw * 0.7f + measured.yaw * 0.3f
+                                smoothPitch = smoothPitch * 0.7f + measured.pitch * 0.3f
+                            }
+
+                            onPoseResult(
+                                HeadPose(
+                                    detected = true,
+                                    yaw = smoothYaw,
+                                    pitch = smoothPitch,
+                                    landmarks = measured.landmarks
+                                )
+                            )
+                        }
+                    }
                 }
                 .setErrorListener { error ->
                     onError("Lỗi MediaPipe: ${error.message ?: "Không xác định"}")
@@ -462,6 +571,7 @@ private fun CameraPreview(
                 analysis.setAnalyzer(cameraExecutor) { imageProxy ->
                     try {
                         val landmarker = faceLandmarker
+
                         if (landmarker != null) {
                             val bitmap = imageProxy.toBitmap()
                             val mpImage = BitmapImageBuilder(bitmap).build()
