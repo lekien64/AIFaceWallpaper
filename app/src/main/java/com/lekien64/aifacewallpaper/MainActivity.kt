@@ -4,18 +4,19 @@ package com.lekien64.aifacewallpaper
 import android.Manifest
 import android.content.pm.PackageManager
 import android.os.Bundle
+import android.os.SystemClock
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.camera.core.CameraSelector
+import androidx.camera.core.ImageAnalysis
 import androidx.camera.core.Preview
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -30,7 +31,14 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.LocalLifecycleOwner
-import kotlinx.coroutines.launch
+import com.google.mediapipe.framework.image.BitmapImageBuilder
+import com.google.mediapipe.tasks.core.BaseOptions
+import com.google.mediapipe.tasks.vision.core.ImageProcessingOptions
+import com.google.mediapipe.tasks.vision.core.RunningMode
+import com.google.mediapipe.tasks.vision.facelandmarker.FaceLandmarker
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import java.util.concurrent.Executors
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -75,25 +83,42 @@ private fun HomeScreen(onOpenScanner: () -> Unit) {
     ) {
         Spacer(Modifier.height(20.dp))
 
-        Text("AI FACE", color = Accent, fontSize = 15.sp,
-            fontWeight = FontWeight.Bold, letterSpacing = 5.sp)
+        Text(
+            "AI FACE",
+            color = Accent,
+            fontSize = 15.sp,
+            fontWeight = FontWeight.Bold,
+            letterSpacing = 5.sp
+        )
 
-        Text("WALLPAPER", color = Color.White,
-            fontSize = 32.sp, fontWeight = FontWeight.ExtraBold)
+        Text(
+            "WALLPAPER",
+            color = Color.White,
+            fontSize = 32.sp,
+            fontWeight = FontWeight.ExtraBold
+        )
 
         Text(
             "Tạo hồ sơ khuôn mặt và biến video thành hình nền động.",
-            color = Color(0xFFB9C3D8), fontSize = 16.sp
+            color = Color(0xFFB9C3D8),
+            fontSize = 16.sp
         )
 
         GlassCard {
-            Text("HỒ SƠ KHUÔN MẶT", color = Accent,
-                fontWeight = FontWeight.Bold)
+            Text(
+                "HỒ SƠ KHUÔN MẶT",
+                color = Accent,
+                fontWeight = FontWeight.Bold
+            )
 
             Spacer(Modifier.height(12.dp))
 
-            Text("Chưa có hồ sơ", color = Color.White,
-                fontSize = 23.sp, fontWeight = FontWeight.Bold)
+            Text(
+                "Chưa có hồ sơ",
+                color = Color.White,
+                fontSize = 23.sp,
+                fontWeight = FontWeight.Bold
+            )
 
             Spacer(Modifier.height(8.dp))
 
@@ -114,13 +139,20 @@ private fun HomeScreen(onOpenScanner: () -> Unit) {
         }
 
         GlassCard {
-            Text("CHẾ ĐỘ TẠO VIDEO", color = Accent,
-                fontWeight = FontWeight.Bold)
+            Text(
+                "CHẾ ĐỘ TẠO VIDEO",
+                color = Accent,
+                fontWeight = FontWeight.Bold
+            )
 
             Spacer(Modifier.height(12.dp))
 
-            Text("Review Before Create", color = Color.White,
-                fontSize = 21.sp, fontWeight = FontWeight.Bold)
+            Text(
+                "Review Before Create",
+                color = Color.White,
+                fontSize = 21.sp,
+                fontWeight = FontWeight.Bold
+            )
 
             Spacer(Modifier.height(8.dp))
 
@@ -134,7 +166,8 @@ private fun HomeScreen(onOpenScanner: () -> Unit) {
 
         Text(
             "Xử lý ngoại tuyến · Dữ liệu lưu trên thiết bị",
-            color = Color(0xFFB9C3D8), fontSize = 12.sp
+            color = Color(0xFFB9C3D8),
+            fontSize = 12.sp
         )
     }
 }
@@ -142,10 +175,12 @@ private fun HomeScreen(onOpenScanner: () -> Unit) {
 @Composable
 private fun ScannerScreen(onBack: () -> Unit) {
     val context = LocalContext.current
+
     var hasPermission by remember {
         mutableStateOf(
             ContextCompat.checkSelfPermission(
-                context, Manifest.permission.CAMERA
+                context,
+                Manifest.permission.CAMERA
             ) == PackageManager.PERMISSION_GRANTED
         )
     }
@@ -158,6 +193,8 @@ private fun ScannerScreen(onBack: () -> Unit) {
 
     var currentAngle by remember { mutableIntStateOf(0) }
     var useFrontCamera by remember { mutableStateOf(true) }
+    var faceStatus by remember { mutableStateOf("Đang chờ camera") }
+    var landmarkCount by remember { mutableIntStateOf(0) }
 
     val angles = listOf(
         "Chính diện",
@@ -212,7 +249,20 @@ private fun ScannerScreen(onBack: () -> Unit) {
             contentAlignment = Alignment.Center
         ) {
             if (hasPermission) {
-                CameraPreview(useFrontCamera)
+                CameraPreview(
+                    useFrontCamera = useFrontCamera,
+                    onFaceResult = { count ->
+                        landmarkCount = count
+                        faceStatus = if (count > 0) {
+                            "Đã nhận diện khuôn mặt"
+                        } else {
+                            "Chưa phát hiện khuôn mặt"
+                        }
+                    },
+                    onError = { message ->
+                        faceStatus = message
+                    }
+                )
             } else {
                 Text(
                     "Cần cấp quyền camera để bắt đầu quét.",
@@ -252,8 +302,39 @@ private fun ScannerScreen(onBack: () -> Unit) {
         Spacer(Modifier.height(14.dp))
 
         GlassCard {
-            Text("GÓC ĐANG QUÉT", color = Accent,
-                fontWeight = FontWeight.Bold, fontSize = 12.sp)
+            Text(
+                "TRẠNG THÁI NHẬN DIỆN",
+                color = Accent,
+                fontWeight = FontWeight.Bold,
+                fontSize = 12.sp
+            )
+
+            Spacer(Modifier.height(8.dp))
+
+            Text(
+                faceStatus,
+                color = Color.White,
+                fontSize = 18.sp,
+                fontWeight = FontWeight.Bold
+            )
+
+            if (landmarkCount > 0) {
+                Spacer(Modifier.height(4.dp))
+                Text(
+                    "$landmarkCount điểm mốc khuôn mặt",
+                    color = Color(0xFFB9C3D8),
+                    fontSize = 12.sp
+                )
+            }
+
+            Spacer(Modifier.height(14.dp))
+
+            Text(
+                "GÓC ĐANG QUÉT",
+                color = Accent,
+                fontWeight = FontWeight.Bold,
+                fontSize = 12.sp
+            )
 
             Spacer(Modifier.height(8.dp))
 
@@ -313,22 +394,58 @@ private fun ScannerScreen(onBack: () -> Unit) {
 }
 
 @Composable
-private fun CameraPreview(useFrontCamera: Boolean) {
+private fun CameraPreview(
+    useFrontCamera: Boolean,
+    onFaceResult: (Int) -> Unit,
+    onError: (String) -> Unit
+) {
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
 
-    AndroidView(
-        modifier = Modifier.fillMaxSize(),
-        factory = { ctx ->
-            PreviewView(ctx).apply {
-                scaleType = PreviewView.ScaleType.FILL_CENTER
-            }
-        },
-        update = { previewView ->
-            val providerFuture = ProcessCameraProvider.getInstance(context)
+    val previewView = remember {
+        PreviewView(context).apply {
+            scaleType = PreviewView.ScaleType.FILL_CENTER
+            implementationMode = PreviewView.ImplementationMode.PERFORMANCE
+        }
+    }
 
-            providerFuture.addListener({
+    DisposableEffect(previewView, useFrontCamera, lifecycleOwner) {
+        val cameraExecutor = Executors.newSingleThreadExecutor()
+        var faceLandmarker: FaceLandmarker? = null
+        var cameraProvider: ProcessCameraProvider? = null
+
+        try {
+            val options = FaceLandmarker.FaceLandmarkerOptions.builder()
+                .setBaseOptions(
+                    BaseOptions.builder()
+                        .setModelAssetPath("face_landmarker.task")
+                        .build()
+                )
+                .setRunningMode(RunningMode.LIVE_STREAM)
+                .setNumFaces(1)
+                .setMinFaceDetectionConfidence(0.5f)
+                .setMinFacePresenceConfidence(0.5f)
+                .setMinTrackingConfidence(0.5f)
+                .setResultListener { result, _ ->
+                    val count = result.faceLandmarks().firstOrNull()?.size ?: 0
+                    onFaceResult(count)
+                }
+                .setErrorListener { error ->
+                    onError("Lỗi MediaPipe: ${error.message ?: "Không xác định"}")
+                }
+                .build()
+
+            faceLandmarker = FaceLandmarker.createFromOptions(context, options)
+        } catch (error: Exception) {
+            onError("Không tải được model nhận diện")
+        }
+
+        val providerFuture = ProcessCameraProvider.getInstance(context)
+
+        providerFuture.addListener({
+            try {
                 val provider = providerFuture.get()
+                cameraProvider = provider
 
                 val preview = Preview.Builder()
                     .build()
@@ -336,29 +453,74 @@ private fun CameraPreview(useFrontCamera: Boolean) {
                         it.surfaceProvider = previewView.surfaceProvider
                     }
 
+                val analysis = ImageAnalysis.Builder()
+                    .setBackpressureStrategy(
+                        ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST
+                    )
+                    .build()
+
+                analysis.setAnalyzer(cameraExecutor) { imageProxy ->
+                    try {
+                        val landmarker = faceLandmarker
+                        if (landmarker != null) {
+                            val bitmap = imageProxy.toBitmap()
+                            val mpImage = BitmapImageBuilder(bitmap).build()
+
+                            val imageOptions =
+                                ImageProcessingOptions.builder()
+                                    .setRotationDegrees(
+                                        imageProxy.imageInfo.rotationDegrees
+                                    )
+                                    .build()
+
+                            landmarker.detectAsync(
+                                mpImage,
+                                imageOptions,
+                                SystemClock.uptimeMillis()
+                            )
+                        }
+                    } catch (error: Exception) {
+                        onError("Đang xử lý hình ảnh...")
+                    } finally {
+                        imageProxy.close()
+                    }
+                }
+
                 val selector = if (useFrontCamera) {
                     CameraSelector.DEFAULT_FRONT_CAMERA
                 } else {
                     CameraSelector.DEFAULT_BACK_CAMERA
                 }
 
-                try {
-                    provider.unbindAll()
-                    provider.bindToLifecycle(
-                        lifecycleOwner,
-                        selector,
-                        preview
-                    )
-                } catch (_: Exception) {
-                    // Camera unavailable or selector unsupported.
-                }
-            }, ContextCompat.getMainExecutor(context))
+                provider.unbindAll()
+                provider.bindToLifecycle(
+                    lifecycleOwner,
+                    selector,
+                    preview,
+                    analysis
+                )
+            } catch (error: Exception) {
+                onError("Không thể khởi động camera")
+            }
+        }, ContextCompat.getMainExecutor(context))
+
+        onDispose {
+            cameraProvider?.unbindAll()
+            faceLandmarker?.close()
+            cameraExecutor.shutdown()
         }
+    }
+
+    AndroidView(
+        modifier = Modifier.fillMaxSize(),
+        factory = { previewView }
     )
 }
 
 @Composable
-private fun GlassCard(content: @Composable ColumnScope.() -> Unit) {
+private fun GlassCard(
+    content: @Composable ColumnScope.() -> Unit
+) {
     Card(
         modifier = Modifier.fillMaxWidth(),
         shape = RoundedCornerShape(28.dp),
