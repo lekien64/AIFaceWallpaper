@@ -39,8 +39,10 @@ import com.google.mediapipe.tasks.vision.facelandmarker.FaceLandmarker
 import java.util.concurrent.Executors
 import kotlin.math.asin
 import kotlin.math.atan2
-import kotlin.math.roundToInt
 import kotlin.math.sqrt
+import kotlin.math.roundToInt
+
+private val Accent = Color(0xFF91AAFF)
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -48,8 +50,6 @@ class MainActivity : ComponentActivity() {
         setContent { AppScreen() }
     }
 }
-
-private val Accent = Color(0xFF91AAFF)
 
 private data class HeadPose(
     val detected: Boolean = false,
@@ -59,71 +59,76 @@ private data class HeadPose(
     val landmarks: Int = 0
 )
 
-/*
- * MediaPipe returns a 4x4 facial transformation matrix
- * as a flat column-major FloatArray.
- *
- * This function extracts approximate Euler angles.
- * Sign conventions must be validated on the target device.
- */
-private fun estimatePoseFromMatrix(matrix: FloatArray): HeadPose? {
-    if (matrix.size < 16) return null
+private data class Rotation3D(
+    val r00: Float, val r01: Float, val r02: Float,
+    val r10: Float, val r11: Float, val r12: Float,
+    val r20: Float, val r21: Float, val r22: Float
+)
 
-    // Rotation matrix entries, column-major layout.
-    val r00 = matrix[0]
-    val r10 = matrix[1]
-    val r20 = matrix[2]
+private fun normalizeRotation(m: FloatArray): Rotation3D? {
+    if (m.size < 16) return null
 
-    val r01 = matrix[4]
-    val r11 = matrix[5]
-    val r21 = matrix[6]
+    val sx = sqrt(m[0] * m[0] + m[1] * m[1] + m[2] * m[2])
+    val sy = sqrt(m[4] * m[4] + m[5] * m[5] + m[6] * m[6])
+    val sz = sqrt(m[8] * m[8] + m[9] * m[9] + m[10] * m[10])
 
-    val r02 = matrix[8]
-    val r12 = matrix[9]
-    val r22 = matrix[10]
-
-    // Remove scale from the rotation columns.
-    val scaleX = sqrt(r00 * r00 + r10 * r10 + r20 * r20)
-    val scaleY = sqrt(r01 * r01 + r11 * r11 + r21 * r21)
-    val scaleZ = sqrt(r02 * r02 + r12 * r12 + r22 * r22)
-
-    if (scaleX < 0.0001f || scaleY < 0.0001f || scaleZ < 0.0001f) {
+    if (sx < 0.0001f || sy < 0.0001f || sz < 0.0001f) {
         return null
     }
 
-    val nr00 = r00 / scaleX
-    val nr10 = r10 / scaleX
-    val nr20 = r20 / scaleX
-
-    val nr01 = r01 / scaleY
-    val nr11 = r11 / scaleY
-    val nr21 = r21 / scaleY
-
-    val nr02 = r02 / scaleZ
-    val nr12 = r12 / scaleZ
-    val nr22 = r22 / scaleZ
-
-    // Euler extraction for the selected rotation convention.
-    val pitchRadians = asin((-nr12).coerceIn(-1f, 1f))
-    val yawRadians = atan2(nr02, nr22)
-    val rollRadians = atan2(nr10, nr11)
-
-    val toDegrees = (180.0 / Math.PI).toFloat()
-
-    return HeadPose(
-        detected = true,
-        yaw = yawRadians * toDegrees,
-        pitch = pitchRadians * toDegrees,
-        roll = rollRadians * toDegrees
+    return Rotation3D(
+        m[0] / sx, m[4] / sy, m[8] / sz,
+        m[1] / sx, m[5] / sy, m[9] / sz,
+        m[2] / sx, m[6] / sy, m[10] / sz
     )
 }
 
-private fun directionText(yaw: Float, pitch: Float): String {
+private fun relativeRotation(
+    current: Rotation3D,
+    baseline: Rotation3D
+): Rotation3D {
+    // Relative rotation = current * transpose(baseline)
+    return Rotation3D(
+        current.r00 * baseline.r00 + current.r01 * baseline.r01 + current.r02 * baseline.r02,
+        current.r00 * baseline.r10 + current.r01 * baseline.r11 + current.r02 * baseline.r12,
+        current.r00 * baseline.r20 + current.r01 * baseline.r21 + current.r02 * baseline.r22,
+
+        current.r10 * baseline.r00 + current.r11 * baseline.r01 + current.r12 * baseline.r02,
+        current.r10 * baseline.r10 + current.r11 * baseline.r11 + current.r12 * baseline.r12,
+        current.r10 * baseline.r20 + current.r11 * baseline.r21 + current.r12 * baseline.r22,
+
+        current.r20 * baseline.r00 + current.r21 * baseline.r01 + current.r22 * baseline.r02,
+        current.r20 * baseline.r10 + current.r21 * baseline.r11 + current.r22 * baseline.r12,
+        current.r20 * baseline.r20 + current.r21 * baseline.r21 + current.r22 * baseline.r22
+    )
+}
+
+private fun rotationToPose(
+    rotation: Rotation3D,
+    landmarks: Int
+): HeadPose {
+    // Euler angles for Z-Y-X rotation order.
+    val pitch = asin((-rotation.r20).coerceIn(-1f, 1f))
+    val yaw = atan2(rotation.r10, rotation.r00)
+    val roll = atan2(rotation.r21, rotation.r22)
+
+    val degrees = (180.0 / Math.PI).toFloat()
+
+    return HeadPose(
+        detected = true,
+        yaw = yaw * degrees,
+        pitch = pitch * degrees,
+        roll = roll * degrees,
+        landmarks = landmarks
+    )
+}
+
+private fun directionText(pose: HeadPose): String {
     return when {
-        yaw < -12f -> "Đang quay trái"
-        yaw > 12f -> "Đang quay phải"
-        pitch < -10f -> "Đang ngẩng lên"
-        pitch > 10f -> "Đang cúi xuống"
+        pose.yaw < -12f -> "Đang quay trái"
+        pose.yaw > 12f -> "Đang quay phải"
+        pose.pitch < -10f -> "Đang ngẩng lên"
+        pose.pitch > 10f -> "Đang cúi xuống"
         else -> "Gần chính diện"
     }
 }
@@ -252,13 +257,12 @@ private fun ScannerScreen(onBack: () -> Unit) {
 
     val permissionLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestPermission()
-    ) { granted ->
-        hasPermission = granted
-    }
+    ) { hasPermission = it }
 
     var currentAngle by remember { mutableIntStateOf(0) }
     var useFrontCamera by remember { mutableStateOf(true) }
     var pose by remember { mutableStateOf(HeadPose()) }
+    var calibrated by remember { mutableStateOf(false) }
     var faceStatus by remember { mutableStateOf("Đang chờ camera") }
 
     val angles = listOf(
@@ -296,8 +300,7 @@ private fun ScannerScreen(onBack: () -> Unit) {
             Text(
                 "AI FACE SCANNER",
                 color = Accent,
-                fontWeight = FontWeight.Bold,
-                letterSpacing = 1.sp
+                fontWeight = FontWeight.Bold
             )
         }
 
@@ -307,10 +310,7 @@ private fun ScannerScreen(onBack: () -> Unit) {
             Modifier
                 .weight(1f)
                 .fillMaxWidth()
-                .background(
-                    Color(0xFF202B3D),
-                    RoundedCornerShape(28.dp)
-                ),
+                .background(Color(0xFF202B3D), RoundedCornerShape(28.dp)),
             contentAlignment = Alignment.Center
         ) {
             if (hasPermission) {
@@ -319,59 +319,37 @@ private fun ScannerScreen(onBack: () -> Unit) {
                     onPoseResult = { newPose ->
                         pose = newPose
                         faceStatus = if (newPose.detected) {
-                            directionText(newPose.yaw, newPose.pitch)
+                            directionText(newPose)
                         } else {
                             "Chưa phát hiện khuôn mặt"
                         }
                     },
-                    onError = { message ->
-                        faceStatus = message
-                    }
+                    onError = { faceStatus = it }
                 )
             } else {
-                Text(
-                    "Cần cấp quyền camera để bắt đầu quét.",
-                    color = Color.White
-                )
+                Text("Cần cấp quyền camera", color = Color.White)
             }
 
             Box(
                 Modifier
                     .size(230.dp, 300.dp)
-                    .border(
-                        2.dp,
-                        Accent.copy(alpha = 0.9f),
-                        RoundedCornerShape(48.dp)
-                    )
+                    .border(2.dp, Accent, RoundedCornerShape(48.dp))
             )
 
-            Column(
-                Modifier
-                    .align(Alignment.BottomCenter)
-                    .padding(18.dp),
-                horizontalAlignment = Alignment.CenterHorizontally
-            ) {
-                Text(
-                    "Đưa khuôn mặt vào khung",
-                    color = Color.White,
-                    fontWeight = FontWeight.Bold
-                )
-                Text(
-                    "Giữ điện thoại ngang tầm mắt",
-                    color = Color.White.copy(alpha = 0.8f),
-                    fontSize = 12.sp
-                )
-            }
+            Text(
+                "Đưa khuôn mặt vào khung",
+                Modifier.align(Alignment.BottomCenter).padding(20.dp),
+                color = Color.White
+            )
         }
 
-        Spacer(Modifier.height(14.dp))
+        Spacer(Modifier.height(12.dp))
 
         GlassCard {
             Text(
-                "AI PHÂN TÍCH TƯ THẾ 3D",
+                "PHÂN TÍCH TƯ THẾ 3D",
                 color = Accent,
-                fontWeight = FontWeight.Bold,
-                fontSize = 12.sp
+                fontWeight = FontWeight.Bold
             )
 
             Spacer(Modifier.height(8.dp))
@@ -383,7 +361,7 @@ private fun ScannerScreen(onBack: () -> Unit) {
                 fontWeight = FontWeight.Bold
             )
 
-            Spacer(Modifier.height(8.dp))
+            Spacer(Modifier.height(12.dp))
 
             Row(
                 Modifier.fillMaxWidth(),
@@ -397,73 +375,75 @@ private fun ScannerScreen(onBack: () -> Unit) {
             Spacer(Modifier.height(8.dp))
 
             Text(
-                "${pose.landmarks} điểm mốc · Ma trận 3D MediaPipe",
-                color = Color(0xFFB9C3D8),
-                fontSize = 11.sp
+                if (calibrated) "Đã hiệu chuẩn mốc chính diện" else "Chưa hiệu chuẩn",
+                color = if (calibrated) Color(0xFF8FE0B0) else Color(0xFFFFCF80),
+                fontSize = 12.sp
             )
 
-            Spacer(Modifier.height(14.dp))
+            Spacer(Modifier.height(12.dp))
 
-            Text("GÓC ĐANG QUÉT", color = Accent,
+            Button(
+                onClick = {
+                    // This button is enabled only after a face is detected.
+                    calibrationRequested = true
+                },
+                modifier = Modifier.fillMaxWidth(),
+                enabled = pose.detected
+            ) {
+                Text("HIỆU CHUẨN CHÍNH DIỆN")
+            }
+
+            Spacer(Modifier.height(12.dp))
+
+            Text("GÓC ĐANG HƯỚNG DẪN", color = Accent,
                 fontWeight = FontWeight.Bold, fontSize = 12.sp)
 
-            Spacer(Modifier.height(8.dp))
+            Spacer(Modifier.height(6.dp))
 
             Text(
                 angles[currentAngle],
                 color = Color.White,
-                fontSize = 23.sp,
+                fontSize = 22.sp,
                 fontWeight = FontWeight.Bold
             )
 
-            Spacer(Modifier.height(10.dp))
-
             LinearProgressIndicator(
                 progress = { (currentAngle + 1) / 7f },
-                modifier = Modifier.fillMaxWidth(),
-                color = Accent,
-                trackColor = Color.White.copy(alpha = 0.15f)
+                modifier = Modifier.fillMaxWidth().padding(top = 10.dp),
+                color = Accent
             )
 
-            Spacer(Modifier.height(8.dp))
-
             Text(
-                "Góc ${currentAngle + 1}/7 · Tiến độ hướng dẫn",
+                "Góc ${currentAngle + 1}/7 · Chưa tự động xác nhận",
                 color = Color(0xFFB9C3D8),
-                fontSize = 12.sp
+                fontSize = 11.sp
             )
         }
 
-        Spacer(Modifier.height(12.dp))
+        Spacer(Modifier.height(10.dp))
 
         Row(
             Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.spacedBy(10.dp)
         ) {
             OutlinedButton(
-                onClick = {
-                    useFrontCamera = !useFrontCamera
-                    pose = HeadPose()
-                },
+                onClick = { useFrontCamera = !useFrontCamera },
                 modifier = Modifier.weight(1f)
             ) {
                 Text("Đổi camera")
             }
 
             Button(
-                onClick = {
-                    currentAngle = (currentAngle + 1) % angles.size
-                },
-                modifier = Modifier.weight(1f),
-                enabled = hasPermission
+                onClick = { currentAngle = (currentAngle + 1) % 7 },
+                modifier = Modifier.weight(1f)
             ) {
                 Text("Góc tiếp theo")
             }
         }
-
-        Spacer(Modifier.height(8.dp))
     }
 }
+
+private var calibrationRequested = false
 
 @Composable
 private fun PoseValue(label: String, value: Float) {
@@ -495,14 +475,15 @@ private fun CameraPreview(
     }
 
     DisposableEffect(previewView, useFrontCamera, lifecycleOwner) {
-        val cameraExecutor = Executors.newSingleThreadExecutor()
-        var faceLandmarker: FaceLandmarker? = null
-        var cameraProvider: ProcessCameraProvider? = null
+        val executor = Executors.newSingleThreadExecutor()
+        var landmarker: FaceLandmarker? = null
+        var provider: ProcessCameraProvider? = null
+        var baseline: Rotation3D? = null
 
         var smoothYaw = 0f
         var smoothPitch = 0f
         var smoothRoll = 0f
-        var hasPreviousPose = false
+        var hasPrevious = false
 
         try {
             val options = FaceLandmarker.FaceLandmarkerOptions.builder()
@@ -524,89 +505,91 @@ private fun CameraPreview(
                         .firstOrNull()
 
                     if (face == null || matrix == null) {
-                        hasPreviousPose = false
+                        hasPrevious = false
                         onPoseResult(HeadPose())
                     } else {
-                        val measured = estimatePoseFromMatrix(matrix)
+                        val current = normalizeRotation(matrix)
 
-                        if (measured != null) {
-                            if (!hasPreviousPose) {
+                        if (current != null) {
+                            if (calibrationRequested) {
+                                baseline = current
+                                calibrationRequested = false
+                                hasPrevious = false
+                            }
+
+                            val reference = baseline
+                            val relative = if (reference != null) {
+                                relativeRotation(current, reference)
+                            } else {
+                                current
+                            }
+
+                            val measured = rotationToPose(relative, face.size)
+
+                            if (!hasPrevious) {
                                 smoothYaw = measured.yaw
                                 smoothPitch = measured.pitch
                                 smoothRoll = measured.roll
-                                hasPreviousPose = true
+                                hasPrevious = true
                             } else {
-                                smoothYaw = smoothYaw * 0.7f + measured.yaw * 0.3f
-                                smoothPitch = smoothPitch * 0.7f + measured.pitch * 0.3f
-                                smoothRoll = smoothRoll * 0.7f + measured.roll * 0.3f
+                                smoothYaw = smoothYaw * 0.75f + measured.yaw * 0.25f
+                                smoothPitch = smoothPitch * 0.75f + measured.pitch * 0.25f
+                                smoothRoll = smoothRoll * 0.75f + measured.roll * 0.25f
                             }
 
                             onPoseResult(
-                                HeadPose(
-                                    detected = true,
+                                measured.copy(
                                     yaw = smoothYaw,
                                     pitch = smoothPitch,
-                                    roll = smoothRoll,
-                                    landmarks = face.size
+                                    roll = smoothRoll
                                 )
                             )
                         }
                     }
                 }
-                .setErrorListener { error ->
-                    onError("Lỗi MediaPipe: ${error.message ?: "Không xác định"}")
+                .setErrorListener {
+                    onError("Lỗi MediaPipe: ${it.message ?: "Không xác định"}")
                 }
                 .build()
 
-            faceLandmarker = FaceLandmarker.createFromOptions(context, options)
-        } catch (error: Exception) {
+            landmarker = FaceLandmarker.createFromOptions(context, options)
+        } catch (e: Exception) {
             onError("Không tải được model nhận diện")
         }
 
-        val providerFuture = ProcessCameraProvider.getInstance(context)
+        val future = ProcessCameraProvider.getInstance(context)
 
-        providerFuture.addListener({
+        future.addListener({
             try {
-                val provider = providerFuture.get()
-                cameraProvider = provider
+                val cameraProvider = future.get()
+                provider = cameraProvider
 
-                val preview = Preview.Builder()
-                    .build()
-                    .also {
-                        it.surfaceProvider = previewView.surfaceProvider
-                    }
+                val preview = Preview.Builder().build().also {
+                    it.surfaceProvider = previewView.surfaceProvider
+                }
 
                 val analysis = ImageAnalysis.Builder()
-                    .setBackpressureStrategy(
-                        ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST
-                    )
+                    .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
                     .build()
 
-                analysis.setAnalyzer(cameraExecutor) { imageProxy ->
+                analysis.setAnalyzer(executor) { image ->
                     try {
-                        val landmarker = faceLandmarker
+                        val bitmap = image.toBitmap()
+                        val mpImage = BitmapImageBuilder(bitmap).build()
 
-                        if (landmarker != null) {
-                            val bitmap = imageProxy.toBitmap()
-                            val mpImage = BitmapImageBuilder(bitmap).build()
+                        val processing = ImageProcessingOptions.builder()
+                            .setRotationDegrees(image.imageInfo.rotationDegrees)
+                            .build()
 
-                            val imageOptions =
-                                ImageProcessingOptions.builder()
-                                    .setRotationDegrees(
-                                        imageProxy.imageInfo.rotationDegrees
-                                    )
-                                    .build()
-
-                            landmarker.detectAsync(
-                                mpImage,
-                                imageOptions,
-                                SystemClock.uptimeMillis()
-                            )
-                        }
-                    } catch (error: Exception) {
-                        onError("Đang xử lý hình ảnh...")
+                        landmarker?.detectAsync(
+                            mpImage,
+                            processing,
+                            SystemClock.uptimeMillis()
+                        )
+                    } catch (e: Exception) {
+                        onError("Đang xử lý camera")
                     } finally {
-                        imageProxy.close()
+                        image.close()
                     }
                 }
 
@@ -616,22 +599,22 @@ private fun CameraPreview(
                     CameraSelector.DEFAULT_BACK_CAMERA
                 }
 
-                provider.unbindAll()
-                provider.bindToLifecycle(
+                cameraProvider.unbindAll()
+                cameraProvider.bindToLifecycle(
                     lifecycleOwner,
                     selector,
                     preview,
                     analysis
                 )
-            } catch (error: Exception) {
+            } catch (e: Exception) {
                 onError("Không thể khởi động camera")
             }
         }, ContextCompat.getMainExecutor(context))
 
         onDispose {
-            cameraProvider?.unbindAll()
-            faceLandmarker?.close()
-            cameraExecutor.shutdown()
+            provider?.unbindAll()
+            landmarker?.close()
+            executor.shutdown()
         }
     }
 
