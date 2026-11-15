@@ -36,13 +36,11 @@ import com.google.mediapipe.tasks.core.BaseOptions
 import com.google.mediapipe.tasks.vision.core.ImageProcessingOptions
 import com.google.mediapipe.tasks.vision.core.RunningMode
 import com.google.mediapipe.tasks.vision.facelandmarker.FaceLandmarker
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.withContext
 import java.util.concurrent.Executors
-import kotlin.math.atan
-import kotlin.math.max
-import kotlin.math.min
+import kotlin.math.asin
+import kotlin.math.atan2
 import kotlin.math.roundToInt
+import kotlin.math.sqrt
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -57,50 +55,66 @@ private data class HeadPose(
     val detected: Boolean = false,
     val yaw: Float = 0f,
     val pitch: Float = 0f,
+    val roll: Float = 0f,
     val landmarks: Int = 0
 )
 
-private fun estimateHeadPose(
-    landmarks: List<com.google.mediapipe.tasks.components.containers.NormalizedLandmark>,
-    frontCamera: Boolean
-): HeadPose? {
-    if (landmarks.size < 264) return null
+/*
+ * MediaPipe returns a 4x4 facial transformation matrix
+ * as a flat column-major FloatArray.
+ *
+ * This function extracts approximate Euler angles.
+ * Sign conventions must be validated on the target device.
+ */
+private fun estimatePoseFromMatrix(matrix: FloatArray): HeadPose? {
+    if (matrix.size < 16) return null
 
-    val nose = landmarks[1]
-    val leftEye = landmarks[33]
-    val rightEye = landmarks[263]
-    val mouthLeft = landmarks[61]
-    val mouthRight = landmarks[291]
+    // Rotation matrix entries, column-major layout.
+    val r00 = matrix[0]
+    val r10 = matrix[1]
+    val r20 = matrix[2]
 
-    val eyeCenterX = (leftEye.x() + rightEye.x()) / 2f
-    val eyeCenterY = (leftEye.y() + rightEye.y()) / 2f
-    val eyeWidth = kotlin.math.abs(leftEye.x() - rightEye.x())
+    val r01 = matrix[4]
+    val r11 = matrix[5]
+    val r21 = matrix[6]
 
-    if (eyeWidth < 0.001f) return null
+    val r02 = matrix[8]
+    val r12 = matrix[9]
+    val r22 = matrix[10]
 
-    val noseOffset = (nose.x() - eyeCenterX) / eyeWidth
+    // Remove scale from the rotation columns.
+    val scaleX = sqrt(r00 * r00 + r10 * r10 + r20 * r20)
+    val scaleY = sqrt(r01 * r01 + r11 * r11 + r21 * r21)
+    val scaleZ = sqrt(r02 * r02 + r12 * r12 + r22 * r22)
 
-    var yaw = Math.toDegrees(
-        atan((noseOffset * 2.0f).toDouble())
-    ).toFloat()
+    if (scaleX < 0.0001f || scaleY < 0.0001f || scaleZ < 0.0001f) {
+        return null
+    }
 
-    if (frontCamera) yaw = -yaw
+    val nr00 = r00 / scaleX
+    val nr10 = r10 / scaleX
+    val nr20 = r20 / scaleX
 
-    val mouthCenterY = (mouthLeft.y() + mouthRight.y()) / 2f
-    val eyeToMouth = mouthCenterY - eyeCenterY
+    val nr01 = r01 / scaleY
+    val nr11 = r11 / scaleY
+    val nr21 = r21 / scaleY
 
-    if (eyeToMouth <= 0.001f) return null
+    val nr02 = r02 / scaleZ
+    val nr12 = r12 / scaleZ
+    val nr22 = r22 / scaleZ
 
-    val nosePosition = (nose.y() - eyeCenterY) / eyeToMouth
+    // Euler extraction for the selected rotation convention.
+    val pitchRadians = asin((-nr12).coerceIn(-1f, 1f))
+    val yawRadians = atan2(nr02, nr22)
+    val rollRadians = atan2(nr10, nr11)
 
-    val pitch = ((nosePosition - 0.52f) * 120f)
-        .coerceIn(-45f, 45f)
+    val toDegrees = (180.0 / Math.PI).toFloat()
 
     return HeadPose(
         detected = true,
-        yaw = yaw.coerceIn(-60f, 60f),
-        pitch = pitch,
-        landmarks = landmarks.size
+        yaw = yawRadians * toDegrees,
+        pitch = pitchRadians * toDegrees,
+        roll = rollRadians * toDegrees
     )
 }
 
@@ -354,7 +368,7 @@ private fun ScannerScreen(onBack: () -> Unit) {
 
         GlassCard {
             Text(
-                "AI PHÂN TÍCH TƯ THẾ ĐẦU",
+                "AI PHÂN TÍCH TƯ THẾ 3D",
                 color = Accent,
                 fontWeight = FontWeight.Bold,
                 fontSize = 12.sp
@@ -377,21 +391,13 @@ private fun ScannerScreen(onBack: () -> Unit) {
             ) {
                 PoseValue("YAW", pose.yaw)
                 PoseValue("PITCH", pose.pitch)
-                Column {
-                    Text("LANDMARKS", color = Accent, fontSize = 11.sp)
-                    Text(
-                        "${pose.landmarks}",
-                        color = Color.White,
-                        fontSize = 18.sp,
-                        fontWeight = FontWeight.Bold
-                    )
-                }
+                PoseValue("ROLL", pose.roll)
             }
 
             Spacer(Modifier.height(8.dp))
 
             Text(
-                "Số đo ước lượng, chưa hiệu chuẩn",
+                "${pose.landmarks} điểm mốc · Ma trận 3D MediaPipe",
                 color = Color(0xFFB9C3D8),
                 fontSize = 11.sp
             )
@@ -495,6 +501,7 @@ private fun CameraPreview(
 
         var smoothYaw = 0f
         var smoothPitch = 0f
+        var smoothRoll = 0f
         var hasPreviousPose = false
 
         try {
@@ -509,23 +516,29 @@ private fun CameraPreview(
                 .setMinFaceDetectionConfidence(0.5f)
                 .setMinFacePresenceConfidence(0.5f)
                 .setMinTrackingConfidence(0.5f)
+                .setOutputFacialTransformationMatrixes(true)
                 .setResultListener { result, _ ->
                     val face = result.faceLandmarks().firstOrNull()
+                    val matrix = result.facialTransformationMatrixes()
+                        .orElse(emptyList())
+                        .firstOrNull()
 
-                    if (face == null) {
+                    if (face == null || matrix == null) {
                         hasPreviousPose = false
                         onPoseResult(HeadPose())
                     } else {
-                        val measured = estimateHeadPose(face, useFrontCamera)
+                        val measured = estimatePoseFromMatrix(matrix)
 
                         if (measured != null) {
                             if (!hasPreviousPose) {
                                 smoothYaw = measured.yaw
                                 smoothPitch = measured.pitch
+                                smoothRoll = measured.roll
                                 hasPreviousPose = true
                             } else {
                                 smoothYaw = smoothYaw * 0.7f + measured.yaw * 0.3f
                                 smoothPitch = smoothPitch * 0.7f + measured.pitch * 0.3f
+                                smoothRoll = smoothRoll * 0.7f + measured.roll * 0.3f
                             }
 
                             onPoseResult(
@@ -533,7 +546,8 @@ private fun CameraPreview(
                                     detected = true,
                                     yaw = smoothYaw,
                                     pitch = smoothPitch,
-                                    landmarks = measured.landmarks
+                                    roll = smoothRoll,
+                                    landmarks = face.size
                                 )
                             )
                         }
